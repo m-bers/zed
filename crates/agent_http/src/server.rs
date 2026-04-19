@@ -1,44 +1,60 @@
 //! Axum HTTP server: REST snapshots + SSE event stream + embedded SPA.
 
 use std::convert::Infallible;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use axum::Router;
-use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::extract::{Path, Request, State};
+use axum::http::{HeaderValue, StatusCode, header::AUTHORIZATION};
+use axum::middleware::{Next, from_fn_with_state};
 use axum::response::sse::{Event, KeepAlive, Sse};
-use axum::response::{Html, IntoResponse, Json};
+use axum::response::{Html, IntoResponse, Json, Response};
 use axum::routing::{get, post};
 use futures::stream::{Stream, StreamExt};
 use serde::Deserialize;
 use tokio_stream::wrappers::BroadcastStream;
 
+use crate::settings::RuntimeSettings;
 use crate::state::{AppState, Command, ThreadSummary};
 
-const DEFAULT_PORT: u16 = 9292;
 const INDEX_HTML: &str = include_str!("assets/index.html");
 
 pub async fn run(state: AppState) {
+    let settings = RuntimeSettings::from_env();
     state.broker().ensure_started();
 
-    let bind = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), DEFAULT_PORT);
-    let app = Router::new()
+    let mut app = Router::new()
         .route("/", get(index))
         .route("/api/sessions", get(list_sessions))
         .route("/api/sessions/:session_id/prompt", post(send_prompt))
         .route("/api/events", get(events))
         .with_state(state);
 
-    let listener = match tokio::net::TcpListener::bind(bind).await {
+    if let Some(token) = settings.auth_token.clone() {
+        app = app.layer(from_fn_with_state(token, require_bearer));
+    }
+
+    let listener = match tokio::net::TcpListener::bind(settings.bind).await {
         Ok(listener) => listener,
         Err(error) => {
-            log::error!("agent_http: bind {bind} failed: {error}");
+            log::error!("agent_http: bind {} failed: {error}", settings.bind);
             return;
         }
     };
-    log::info!("agent_http: listening on http://{bind}");
+    log::info!("agent_http: listening on http://{}", settings.bind);
     if let Err(error) = axum::serve(listener, app).await {
         log::error!("agent_http: serve loop exited: {error}");
+    }
+}
+
+async fn require_bearer(State(token): State<String>, request: Request, next: Next) -> Response {
+    let expected = format!("Bearer {token}");
+    let provided = request
+        .headers()
+        .get(AUTHORIZATION)
+        .and_then(|v: &HeaderValue| v.to_str().ok());
+    match provided {
+        Some(value) if value == expected => next.run(request).await,
+        _ => (StatusCode::UNAUTHORIZED, "unauthorized").into_response(),
     }
 }
 

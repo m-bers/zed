@@ -50,10 +50,10 @@ fn send_prompt(
         .ok_or_else(|| anyhow::anyhow!("session {session_id} no longer exists"))?;
 
     thread.update(cx, |thread, cx| {
-        let future = thread.send_raw(&content, cx);
+        let future = thread.send(vec![content.into()], cx);
         cx.spawn(async move |_, _| {
             if let Err(error) = future.await {
-                log::error!("agent_http: send_raw failed: {error}");
+                log::error!("agent_http: send failed: {error}");
             }
         })
         .detach();

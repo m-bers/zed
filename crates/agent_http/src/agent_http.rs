@@ -20,6 +20,7 @@ mod commands;
 #[cfg(feature = "workspace_discovery")]
 mod discovery;
 mod server;
+mod settings;
 mod state;
 mod subscriptions;
 
