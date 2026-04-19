@@ -1,0 +1,135 @@
+name: codeindex
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [codeindex]
+    paths:
+      - '.github/workflows/codeindex.yml'
+      - 'crates/agent/**'
+      - 'crates/agent_ui/**'
+      - 'crates/acp_thread/**'
+      - 'crates/agent_servers/**'
+      - 'crates/agent_settings/**'
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: '0'
+  RUST_BACKTRACE: '1'
+  CRATES: agent agent_ui acp_thread agent_servers agent_settings
+
+jobs:
+  rustdoc-json:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install nightly Rust
+        run: |
+          rustup toolchain install nightly --profile minimal
+          rustup default nightly
+          rustc --version
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: codeindex-rustdoc
+          cache-on-failure: true
+
+      - name: Install Linux build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config \
+            libssl-dev \
+            libxkbcommon-dev \
+            libxkbcommon-x11-0 \
+            libwayland-dev \
+            libxcb1-dev \
+            libx11-dev \
+            libxi-dev \
+            libgl1-mesa-dev \
+            protobuf-compiler \
+            cmake \
+            jq
+
+      - name: Generate rustdoc JSON for agent crates
+        run: |
+          set -e
+          mkdir -p .codeindex/raw
+          for crate in $CRATES; do
+            echo "::group::rustdoc $crate"
+            if cargo +nightly rustdoc -p "$crate" -- \
+                -Z unstable-options --output-format json --document-private-items 2>&1 | tail -50; then
+              if [ -f "target/doc/${crate}.json" ]; then
+                cp "target/doc/${crate}.json" ".codeindex/raw/${crate}.json"
+                echo "OK ${crate} $(wc -c < .codeindex/raw/${crate}.json) bytes"
+              else
+                echo "MISSING target/doc/${crate}.json after rustdoc"
+              fi
+            else
+              echo "FAILED rustdoc for ${crate}"
+            fi
+            echo "::endgroup::"
+          done
+
+      - name: Extract minimal symbol index
+        run: |
+          set -e
+          mkdir -p .codeindex/symbols
+          for crate in $CRATES; do
+            src=".codeindex/raw/${crate}.json"
+            dst=".codeindex/symbols/${crate}.json"
+            if [ ! -f "$src" ]; then
+              echo "skip ${crate} (no raw)"
+              continue
+            fi
+            jq '{
+              format_version: .format_version,
+              root: .root,
+              crate_version: .crate_version,
+              paths: (
+                .paths
+                | to_entries
+                | map(select(.value.crate_id == 0))
+                | map({(.key): {path: .value.path, kind: .value.kind}})
+                | add
+              ),
+              items: [
+                .index | to_entries[] | .value
+                | select(.crate_id == 0)
+                | {
+                    id: .id,
+                    name: .name,
+                    visibility: .visibility,
+                    kind: (.inner | keys | first),
+                    span: (.span | if . then "\(.filename):\(.begin[0])-\(.end[0])" else null end),
+                    docs: (if (.docs | type) == "string" then .docs[0:600] else null end),
+                    inner_summary: (
+                      .inner
+                      | to_entries[0]
+                      | { (.key): (.value | tojson | .[0:400]) }
+                    )
+                  }
+              ]
+            }' "$src" > "$dst"
+            wc -c "$dst"
+          done
+
+      - name: Drop raw dumps to keep commit small
+        run: rm -rf .codeindex/raw
+
+      - name: Commit and push index
+        run: |
+          git config user.name 'codeindex-bot'
+          git config user.email 'codeindex@users.noreply.github.com'
+          git add .codeindex/
+          if git diff --cached --quiet; then
+            echo "no index changes"
+          else
+            git commit -m "codeindex: refresh symbol index for agent crates"
+            git push origin HEAD:${GITHUB_REF#refs/heads/}
+          fi
