@@ -1,0 +1,60 @@
+name: agent-http-check
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [agent-http]
+    paths:
+      - 'crates/agent_http/**'
+      - '.github/workflows/agent-http-check.yml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: '0'
+  RUST_BACKTRACE: '1'
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy
+          rustup default stable
+          rustc --version
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: agent-http-check
+          cache-on-failure: true
+
+      - name: Install Linux build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config \
+            libssl-dev \
+            libxkbcommon-dev \
+            libxkbcommon-x11-0 \
+            libwayland-dev \
+            libxcb1-dev \
+            libx11-dev \
+            libxi-dev \
+            libgl1-mesa-dev \
+            protobuf-compiler \
+            cmake
+
+      - name: cargo check -p agent_http
+        run: cargo check -p agent_http --all-targets
+
+      - name: cargo clippy -p agent_http
+        run: cargo clippy -p agent_http --all-targets -- -D warnings
+        continue-on-error: true
+
+      - name: cargo test -p agent_http (compile only)
+        run: cargo test -p agent_http --no-run
