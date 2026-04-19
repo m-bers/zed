@@ -35,25 +35,8 @@ jobs:
           shared-key: agent-http-integration
           cache-on-failure: true
 
-      - name: Install Linux build deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            pkg-config \
-            libssl-dev \
-            libxkbcommon-dev \
-            libxkbcommon-x11-0 \
-            libwayland-dev \
-            libxcb1-dev \
-            libx11-dev \
-            libxi-dev \
-            libgl1-mesa-dev \
-            libasound2-dev \
-            libfontconfig1-dev \
-            libfreetype6-dev \
-            protobuf-compiler \
-            cmake \
-            mold
+      - name: Install Linux build deps via script/linux
+        run: ./script/linux
 
       - name: cargo check -p zed --features agent_http
         env:
