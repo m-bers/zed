@@ -24,6 +24,9 @@ mod settings;
 mod state;
 mod subscriptions;
 
+#[cfg(test)]
+mod tests;
+
 #[cfg(feature = "workspace_discovery")]
 pub use discovery::setup_workspace_observer;
 pub use state::{AppState, AppStateHandle, Command, SnapshotEvent, ThreadSummary};

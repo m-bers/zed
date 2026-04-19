@@ -449,6 +449,22 @@ impl ConversationView {
         })
     }
 
+    /// Resolve the active thread's pending tool-call authorization request
+    /// with the given `kind`. Exposed so out-of-crate consumers
+    /// (e.g. `agent_http`) can act on approval events without replicating the
+    /// lookup against the private `Conversation` entity.
+    pub fn resolve_pending_tool_call(
+        &mut self,
+        session_id: &acp::SessionId,
+        kind: acp::PermissionOptionKind,
+        cx: &mut Context<Self>,
+    ) -> Option<()> {
+        let conversation = self.as_connected_mut()?.conversation.clone();
+        conversation.update(cx, |conversation, cx| {
+            conversation.authorize_pending_tool_call(session_id, kind, cx)
+        })
+    }
+
     pub fn active_thread(&self) -> Option<&Entity<ThreadView>> {
         match &self.server_state {
             ServerState::Connected(connected) => connected.active_view(),

@@ -110,10 +110,10 @@ fn authorize_pending_tool(
         .upgrade()
         .ok_or_else(|| anyhow::anyhow!("ConversationView for {session_id} no longer exists"))?;
 
-    let session_id_parsed = agent_client_protocol::SessionId(session_id.to_string().into());
+    let session_id_parsed = agent_client_protocol::SessionId::new(session_id.to_string());
     let kind = decision.as_kind();
     conversation.update(cx, |view, cx| {
-        view.authorize_pending_tool_call(&session_id_parsed, kind, cx);
+        view.resolve_pending_tool_call(&session_id_parsed, kind, cx);
     });
     Ok(())
 }
