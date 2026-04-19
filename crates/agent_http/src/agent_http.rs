@@ -14,10 +14,14 @@
 //!   inside the existing agent-panel init path.
 
 mod broker;
+#[cfg(feature = "workspace_discovery")]
+mod discovery;
 mod server;
 mod state;
 mod subscriptions;
 
+#[cfg(feature = "workspace_discovery")]
+pub use discovery::setup_workspace_observer;
 pub use state::{AppState, AppStateHandle, SnapshotEvent, ThreadSummary};
 pub use subscriptions::observe_thread;
 
