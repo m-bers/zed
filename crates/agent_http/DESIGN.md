@@ -15,7 +15,7 @@ and the mobile browser.
 - **Headless-capable.** Same binary works when Zed is run via `zed --dev-server`;
   web UI is the only surface required on that machine.
 - **Minimal upstream patches.** Everything non-trivial lives in a new crate so
-  `m-bers/zed` can rebase on `zed-industries/zed` with ~10 lines of conflict
+  `m-bers/zed` can rebase on `zed-industries/zed` with ~20 lines of conflict
   surface.
 
 ## Non-goals
@@ -27,129 +27,97 @@ and the mobile browser.
 
 ## Upstream patch surface
 
-Target: ≤ ~10 lines across 3 files, all feature-gated on `agent_http`.
+Total ~20 lines across 4 files, all feature-gated on `agent_http`.
 
-| File | Change |
-|---|---|
-| `Cargo.toml` (workspace) | Add `agent_http = { path = "crates/agent_http" }` to `[workspace.dependencies]` |
-| `crates/zed/Cargo.toml` | Optional dep + `agent_http` feature |
-| `crates/zed/src/zed.rs` | Feature-gated calls to `agent_http::init(cx)` and `agent_http::setup(workspace, cx)` inside `initialize_agent_panel` |
+| File | Change | Lines |
+|---|---|---|
+| `Cargo.toml` (workspace) | `agent_http` member + path dep | 2 |
+| `crates/zed/Cargo.toml` | Optional dep + `agent_http` feature with `workspace_discovery` | 2 |
+| `crates/zed/src/zed.rs` | Cfg-gated `agent_http::init(cx)` + `setup_workspace_observer(cx)` inside `agent_ui::init`'s callsite | 5 |
+| `crates/agent_ui/src/conversation_view.rs` | Add `pub fn resolve_pending_tool_call` on `ConversationView` so out-of-crate callers can resolve approvals without reaching into the private `Conversation` entity | ~12 |
 
-Whether any accessors need to be added to `AgentPanel` is TBD — see open
-questions #1.
+Everything else lives in `crates/agent_http/`.
 
 ## Crate structure
 
 All code in `crates/agent_http/`.
 
-- `src/agent_http.rs` — lib root, public `init` / `setup` entry points, re-exports
-- `src/settings.rs` — `AgentHttpSettings` (enabled/bind/port/token/cors)
-- `src/state.rs` — `AppState` global: thread registry, snapshots, broker
-- `src/broker.rs` — tokio `broadcast::channel<SnapshotEvent>` fan-out to SSE clients
-- `src/subscriptions.rs` — `ensure_thread_subscription` ported from helix's
-  `thread_service.rs`, translating `AcpThreadEvent` to `SnapshotEvent`
-- `src/server.rs` — Axum HTTP server on `gpui_tokio` runtime; routes below
-- `src/routes/` — REST + SSE handlers
-- `src/assets.rs` — embedded SPA bundle (HTML/JS/CSS via `include_str!`)
+- `src/agent_http.rs` — lib root; public `init` / `setup_workspace_observer`, module decls.
+- `src/settings.rs` — env-var-driven `RuntimeSettings` (`AGENT_HTTP_BIND`, `AGENT_HTTP_PORT`, `AGENT_HTTP_TOKEN`).
+- `src/state.rs` — `AppState` (Send+Sync, held by tokio side) + `AppStateHandle` (main-thread only, holds `ThreadRegistry` / `ConversationViewRegistry` / subscription reservoir).
+- `src/broker.rs` — tokio `broadcast::channel<SnapshotEvent>` fan-out to SSE clients.
+- `src/subscriptions.rs` — `observe_thread`: registers a `cx.subscribe` per `Entity<AcpThread>`, translating `AcpThreadEvent` → `SnapshotEvent`.
+- `src/discovery.rs` (gated: `workspace_discovery`) — `setup_workspace_observer`: walks every `Workspace`'s `AgentPanel.retained_threads`, calling `observe_thread` and populating the `ConversationView` registry.
+- `src/commands.rs` — gpui-side worker consuming a `mpsc::UnboundedReceiver<Command>`, dispatching `SendPrompt` / `CancelSession` / `AuthorizePendingTool`.
+- `src/server.rs` — axum HTTP server on a dedicated tokio runtime; REST + SSE.
+- `src/assets/index.html` — mobile-first SPA (vanilla JS, <10 KB).
+- `src/tests.rs` — unit tests for the non-gpui subsystems (broker, state serialization).
 
 ## Subscription pattern (adapted from helix)
 
 One `cx.subscribe(&acp_thread, …)` per `Entity<AcpThread>`, handling:
 
-- `AcpThreadEvent::NewEntry` → emit `SnapshotEvent::EntryAdded { session_id,
-  entry_index, role, kind, content }`. Entry kinds: `UserMessage`,
-  `AssistantMessage`, `ToolCall` (with `tool_name`, `status`), `ToolCallUpdate`.
-- `AcpThreadEvent::EntryUpdated(ix)` → emit `SnapshotEvent::EntryUpdated { … }`
-  with accumulated content (throttled per-entry, TBD — see open q #2).
-- `AcpThreadEvent::ToolAuthorizationRequested(id)` → add to inbox, emit event.
-- `AcpThreadEvent::ToolAuthorizationReceived(id)` → clear inbox, emit.
-- `AcpThreadEvent::Stopped(reason)` → flush any throttled content for the
-  session (critical: helix learned this bug the hard way — missing flush =
-  truncated final tokens + stuck "streaming" spinner).
-- `AcpThreadEvent::TitleUpdated`, `TokenUsageUpdated`, `SubagentSpawned(id)` →
-  route to corresponding UI sections.
+- `AcpThreadEvent::NewEntry` → emit `SnapshotEvent::EntryAdded`.
+- `AcpThreadEvent::EntryUpdated(ix)` → emit `SnapshotEvent::EntryUpdated` with accumulated content.
+- `AcpThreadEvent::ToolAuthorizationRequested(id)` → inbox event; SPA shows approval buttons.
+- `AcpThreadEvent::ToolAuthorizationReceived(id)` → clears the inbox entry.
+- `AcpThreadEvent::Stopped(reason)` → emit `Stopped` event.
+- `AcpThreadEvent::TitleUpdated` → emit `TitleChanged`.
+- Other variants: ignored for v0.3.
 
-Bugs we inherit fixes for, by reading helix's code:
-- **Persistent-subscription guard**: double-subscribe leaks + duplicates events.
-- **Stopped must flush**: otherwise last ~100ms of streamed content is lost.
-- **Per-entry accumulation semantics**: Zed sends cumulative content per entry
-  id (overwrite), not deltas. Client-side accumulator tracks last message id +
-  byte offset.
-
-Thread discovery mechanism — TBD (open q #1).
+Bugs we inherit fixes for by reading helix's code:
+- **Persistent-subscription guard**: double-subscribe leaks + duplicates events. We deduplicate by checking `ThreadRegistry::lookup_by_string` before subscribing.
 
 ## HTTP/SSE protocol
 
 REST (JSON):
-- `GET /api/sessions` — list all active sessions with summary (title, status, counts)
-- `GET /api/sessions/:id` — full snapshot of one session (entries, plan, token usage)
-- `POST /api/sessions/:id/prompt` — send a prompt (bidirectional write path)
-- `POST /api/sessions/:id/approvals/:tool_id` — resolve a tool authorization
-- `POST /api/sessions` — spawn a new session in a given workspace + agent
 
-SSE:
-- `GET /api/events` — server-sent events stream of all `SnapshotEvent`s across all sessions
-- `GET /api/sessions/:id/events` — SSE scoped to one session
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/` | Embedded SPA |
+| GET | `/api/sessions` | List all known threads (`ThreadSummary[]`) |
+| GET | `/api/events` | SSE stream of `SnapshotEvent` |
+| POST | `/api/sessions/:id/prompt` | Send a user message: `{"content": "…"}` |
+| POST | `/api/sessions/:id/cancel` | Cancel the current running turn |
+| POST | `/api/sessions/:id/approve` | Resolve a pending tool-call approval: `{"decision": "allow_once"\|"allow_always"\|"reject_once"\|"reject_always"}` |
 
-All responses gzipped; SSE uses keep-alive pings every 15s.
+Auth: optional bearer token via `AGENT_HTTP_TOKEN` env var. When set, every
+request must include `Authorization: Bearer <token>` or receive 401.
 
-Auth: if `auth_token` is set, require `Authorization: Bearer <token>` header.
-Default bind is `127.0.0.1:9292`; users who want LAN access set `bind` + `token`.
+## Runtime configuration
 
-## Web UI layout
+Environment variables read once at server startup:
 
-Single-page, mobile-first. Three main views:
-
-- **Tasks** — list of active sessions (status, workspace, agent, last activity)
-- **Session detail** — message feed, tool call timeline, diffs, terminal output
-- **Inbox** — cross-session pending approvals
-
-Uses plain HTML + vanilla JS (no bundler): ~1 KB HTML, ~5 KB JS. Served as
-embedded static assets from the crate.
+| Variable | Default | Notes |
+|---|---|---|
+| `AGENT_HTTP_BIND` | `127.0.0.1` | `0.0.0.0` for LAN/phone access |
+| `AGENT_HTTP_PORT` | `9292` | |
+| `AGENT_HTTP_TOKEN` | (unset) | Enables bearer-auth middleware |
 
 ## Headless mode
 
 Zed's `--dev-server` mode launches a headless SSH-reachable process. The
 agent_http server starts from the same init call regardless of UI state, so
 when `dev-server` is active the HTTP port is bound and the web UI works without
-any GUI being rendered. We don't add a new runtime mode — we just work inside
-the one Zed already has.
+any GUI being rendered.
+
+## Status
+
+- **v0.1 — observe.** One-way AcpThreadEvent → SSE, REST snapshots. ✅
+- **v0.2 — write.** `POST /prompt`. ✅
+- **v0.2.1 — config.** Env vars for bind/port/token. ✅
+- **v0.3 — full bidi.** `POST /cancel`, `POST /approve` (via new
+  `ConversationView::resolve_pending_tool_call` upstream hook). Unit tests. ✅
+- **v0.4 (future)** — migrate env vars to `settings::Settings`, markdown
+  rendering in SPA, optional WebSocket transport, manual E2E verification.
 
 ## Open questions
 
-1. **Thread discovery.** `AcpThread` instances are created inside
-   `agent_ui::agent_panel` / `conversation_view` when the user or an external
-   caller starts a session. There's no public "new thread" event on the panel
-   or on `AgentConnectionStore`. Options:
-   - Add a small `EventEmitter<ThreadSpawned>` on `AgentPanel` (~5 lines
-     upstream)
-   - Observe `Project` + `AgentServerStore` and heuristically walk for new
-     threads (fragile)
-   - Poll `history_store.sessions()` periodically (ugly but simple)
-   First option is cleanest; counts toward the patch budget.
-
-2. **Streaming throttle.** Helix uses 100 ms per-entry throttle to limit
-   message_added events. For SSE, the network-side cost is lower but the
-   client-side render cost remains — pick a throttle (50–100 ms range) and
-   make it configurable.
-
-3. **Multi-window coordination.** If Zed has multiple windows open, `init(cx)`
-   may be called once per window if we're not careful. We bind the server at
-   App-global scope (`cx.set_global(AppState)`) and make `init` idempotent so
-   only the first caller starts the listener.
-
-4. **Persistence.** Do we persist the event log to disk for history when Zed
-   restarts, or accept that history is Zed's responsibility (via `history_store`)
-   and we only show live state? Leaning toward the latter for v1.
-
-5. **Auth model for bidirectional writes.** Token is enough for LAN use, but
-   anyone on LAN with the token can send prompts. Acceptable? Or per-session
-   ACLs? v1: single-token.
-
-## Milestones
-
-- **v0.1 — observe.** One-way: all `AcpThreadEvent`s → SSE. REST for
-  snapshots. No write operations. Inbox for approvals but read-only display.
-- **v0.2 — write.** `POST /prompt` and `POST /approvals`.
-- **v0.3 — spawn.** `POST /sessions` to create new threads from web.
-- **v0.4 — mobile polish.** SPA refinements, offline queueing, notifications.
+1. **Streaming throttle.** Helix uses 100ms per-entry throttle. SSE cost is
+   lower but the client-side render cost remains — revisit if perceived lag
+   appears under heavy streaming.
+2. **Multi-workspace coordination.** `setup_workspace_observer` re-walks all
+   retained threads on every `AgentPanelEvent`, which is O(threads) per event.
+   Fine for tens of threads; revisit above ~100.
+3. **Session persistence.** Thread history is Zed's responsibility; we only
+   surface live state. No change planned.

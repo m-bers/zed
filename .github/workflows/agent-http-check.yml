@@ -55,5 +55,5 @@ jobs:
       - name: cargo clippy -p agent_http
         run: cargo clippy -p agent_http --all-targets -- -D warnings
 
-      - name: cargo test -p agent_http (compile only)
-        run: cargo test -p agent_http --no-run
+      - name: cargo test -p agent_http
+        run: cargo test -p agent_http
