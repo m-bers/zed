@@ -6,6 +6,7 @@ members = [
     "crates/action_log",
     "crates/activity_indicator",
     "crates/agent",
+    "crates/agent_http",
     "crates/agent_servers",
     "crates/agent_settings",
     "crates/agent_ui",
@@ -268,6 +269,7 @@ acp_thread = { path = "crates/acp_thread" }
 action_log = { path = "crates/action_log" }
 agent = { path = "crates/agent" }
 activity_indicator = { path = "crates/activity_indicator" }
+agent_http = { path = "crates/agent_http" }
 agent_ui = { path = "crates/agent_ui" }
 agent_settings = { path = "crates/agent_settings" }
 agent_servers = { path = "crates/agent_servers" }

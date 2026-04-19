@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Agent Manager</title>
+  <style>
+    :root { color-scheme: dark; }
+    html, body { margin: 0; padding: 0; height: 100%; background: #0e1014; color: #e5e9f0; font: 14px/1.5 -apple-system, system-ui, sans-serif; }
+    header { padding: 12px 16px; border-bottom: 1px solid #1f242c; position: sticky; top: 0; background: #0e1014; }
+    header h1 { margin: 0; font-size: 15px; font-weight: 600; }
+    main { padding: 12px 16px; }
+    .session { padding: 12px; border: 1px solid #1f242c; border-radius: 8px; margin-bottom: 8px; }
+    .session-title { font-weight: 600; }
+    .entry { padding: 8px 12px; margin: 6px 0; border-left: 2px solid #2b313c; white-space: pre-wrap; word-wrap: break-word; }
+    .entry.user { border-color: #6cb6ff; }
+    .entry.assistant { border-color: #8be9fd; }
+    .entry.tool_call { border-color: #f1fa8c; font-family: ui-monospace, monospace; font-size: 12.5px; }
+    .empty { color: #6b7280; }
+  </style>
+</head>
+<body>
+  <header><h1>Agent Manager <span id="status" class="empty">connecting…</span></h1></header>
+  <main id="root"><p class="empty">No sessions yet.</p></main>
+  <script>
+    const sessions = new Map();
+    const root = document.getElementById('root');
+    const status = document.getElementById('status');
+
+    function render() {
+      if (sessions.size === 0) {
+        root.innerHTML = '<p class="empty">No sessions yet.</p>';
+        return;
+      }
+      root.innerHTML = '';
+      for (const session of sessions.values()) {
+        const div = document.createElement('div');
+        div.className = 'session';
+        const title = document.createElement('div');
+        title.className = 'session-title';
+        title.textContent = session.title || session.id;
+        div.appendChild(title);
+        for (const entry of session.entries) {
+          const e = document.createElement('div');
+          e.className = 'entry ' + (entry.kind || 'text') + ' ' + (entry.role || '');
+          e.textContent = entry.content || '';
+          div.appendChild(e);
+        }
+        root.appendChild(div);
+      }
+    }
+
+    function ensureSession(id, title) {
+      if (!sessions.has(id)) {
+        sessions.set(id, { id, title: title || null, entries: [] });
+      } else if (title) {
+        sessions.get(id).title = title;
+      }
+      return sessions.get(id);
+    }
+
+    fetch('/api/sessions').then(r => r.json()).then(initial => {
+      for (const s of initial) ensureSession(s.session_id, s.title);
+      render();
+    });
+
+    const es = new EventSource('/api/events');
+    es.addEventListener('open', () => { status.textContent = 'live'; status.className = ''; });
+    es.addEventListener('error', () => { status.textContent = 'reconnecting…'; status.className = 'empty'; });
+    es.addEventListener('snapshot', (ev) => {
+      try {
+        const evt = JSON.parse(ev.data);
+        switch (evt.type) {
+          case 'thread_discovered':
+            ensureSession(evt.session_id, evt.title);
+            break;
+          case 'title_changed':
+            ensureSession(evt.session_id).title = evt.title;
+            break;
+          case 'entry_added': {
+            const s = ensureSession(evt.session_id);
+            s.entries[evt.entry_index] = { role: evt.role, kind: evt.kind, content: evt.content };
+            break;
+          }
+          case 'entry_updated': {
+            const s = ensureSession(evt.session_id);
+            s.entries[evt.entry_index] = { role: evt.role, kind: evt.kind, content: evt.content };
+            break;
+          }
+          case 'stopped':
+            // Could mark a "completed" indicator on the session.
+            break;
+        }
+        render();
+      } catch (err) {
+        console.error(err);
+      }
+    });
+  </script>
+</body>
+</html>
