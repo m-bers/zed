@@ -7,16 +7,21 @@
   <style>
     :root { color-scheme: dark; }
     html, body { margin: 0; padding: 0; height: 100%; background: #0e1014; color: #e5e9f0; font: 14px/1.5 -apple-system, system-ui, sans-serif; }
-    header { padding: 12px 16px; border-bottom: 1px solid #1f242c; position: sticky; top: 0; background: #0e1014; }
+    header { padding: 12px 16px; border-bottom: 1px solid #1f242c; position: sticky; top: 0; background: #0e1014; z-index: 1; }
     header h1 { margin: 0; font-size: 15px; font-weight: 600; }
-    main { padding: 12px 16px; }
-    .session { padding: 12px; border: 1px solid #1f242c; border-radius: 8px; margin-bottom: 8px; }
-    .session-title { font-weight: 600; }
-    .entry { padding: 8px 12px; margin: 6px 0; border-left: 2px solid #2b313c; white-space: pre-wrap; word-wrap: break-word; }
+    main { padding: 12px 16px 120px; }
+    .session { padding: 12px; border: 1px solid #1f242c; border-radius: 8px; margin-bottom: 12px; }
+    .session-title { font-weight: 600; margin-bottom: 6px; }
+    .entry { padding: 8px 12px; margin: 6px 0; border-left: 2px solid #2b313c; white-space: pre-wrap; word-wrap: break-word; overflow-wrap: anywhere; }
     .entry.user { border-color: #6cb6ff; }
     .entry.assistant { border-color: #8be9fd; }
-    .entry.tool_call { border-color: #f1fa8c; font-family: ui-monospace, monospace; font-size: 12.5px; }
+    .entry.tool_call { border-color: #f1fa8c; font-family: ui-monospace, SFMono-Regular, monospace; font-size: 12.5px; }
+    .entry.plan { border-color: #bd93f9; }
     .empty { color: #6b7280; }
+    .compose { display: flex; gap: 6px; margin-top: 10px; }
+    .compose textarea { flex: 1; min-height: 44px; resize: vertical; background: #16181d; color: inherit; border: 1px solid #2b313c; border-radius: 6px; padding: 8px; font: inherit; }
+    .compose button { padding: 8px 14px; background: #3b82f6; color: white; border: 0; border-radius: 6px; font-weight: 600; cursor: pointer; }
+    .compose button:disabled { opacity: 0.5; cursor: not-allowed; }
   </style>
 </head>
 <body>
@@ -41,11 +46,44 @@
         title.textContent = session.title || session.id;
         div.appendChild(title);
         for (const entry of session.entries) {
+          if (!entry) continue;
           const e = document.createElement('div');
           e.className = 'entry ' + (entry.kind || 'text') + ' ' + (entry.role || '');
           e.textContent = entry.content || '';
           div.appendChild(e);
         }
+        const compose = document.createElement('form');
+        compose.className = 'compose';
+        const ta = document.createElement('textarea');
+        ta.placeholder = 'Send a message…';
+        const btn = document.createElement('button');
+        btn.textContent = 'Send';
+        btn.type = 'submit';
+        compose.appendChild(ta);
+        compose.appendChild(btn);
+        compose.addEventListener('submit', async (ev) => {
+          ev.preventDefault();
+          const content = ta.value.trim();
+          if (!content) return;
+          btn.disabled = true;
+          try {
+            const res = await fetch('/api/sessions/' + encodeURIComponent(session.id) + '/prompt', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ content }),
+            });
+            if (!res.ok) {
+              console.error('prompt failed', res.status, await res.text());
+            } else {
+              ta.value = '';
+            }
+          } catch (err) {
+            console.error(err);
+          } finally {
+            btn.disabled = false;
+          }
+        });
+        div.appendChild(compose);
         root.appendChild(div);
       }
     }
@@ -77,18 +115,13 @@
           case 'title_changed':
             ensureSession(evt.session_id).title = evt.title;
             break;
-          case 'entry_added': {
-            const s = ensureSession(evt.session_id);
-            s.entries[evt.entry_index] = { role: evt.role, kind: evt.kind, content: evt.content };
-            break;
-          }
+          case 'entry_added':
           case 'entry_updated': {
             const s = ensureSession(evt.session_id);
             s.entries[evt.entry_index] = { role: evt.role, kind: evt.kind, content: evt.content };
             break;
           }
           case 'stopped':
-            // Could mark a "completed" indicator on the session.
             break;
         }
         render();

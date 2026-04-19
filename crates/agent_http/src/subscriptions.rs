@@ -18,6 +18,7 @@ pub fn observe_thread(thread: Entity<AcpThread>, cx: &mut App) {
     };
     let state = handle.state().clone();
     let subscriptions = handle.subscriptions();
+    let registry = handle.registry();
 
     let (session_id, title) = thread.read_with(cx, |thread, _| {
         (
@@ -25,6 +26,18 @@ pub fn observe_thread(thread: Entity<AcpThread>, cx: &mut App) {
             thread.title().map(|t| t.to_string()),
         )
     });
+
+    if registry
+        .borrow()
+        .lookup_by_string(&session_id.to_string())
+        .is_some()
+    {
+        // Already observing this thread.
+        return;
+    }
+    registry
+        .borrow_mut()
+        .register(session_id.clone(), thread.downgrade());
     state.record_thread(session_id, title);
 
     let sub = cx.subscribe(&thread, move |thread, event, cx| {

@@ -8,12 +8,15 @@
 //! `agent_http` feature flag):
 //!
 //! * `Cargo.toml` (workspace) — add `agent_http = { path = "crates/agent_http" }`.
-//! * `crates/zed/Cargo.toml` — `agent_http = { workspace = true, optional = true }`
-//!   plus `agent_http = ["dep:agent_http"]` in `[features]`.
-//! * `crates/zed/src/zed.rs` — `#[cfg(feature = "agent_http")] agent_http::init(cx);`
+//! * `crates/zed/Cargo.toml` — `agent_http = { workspace = true, optional = true,
+//!   features = ["workspace_discovery"] }` plus `agent_http = ["dep:agent_http"]`
+//!   in `[features]`.
+//! * `crates/zed/src/zed.rs` — `#[cfg(feature = "agent_http")]` block calling
+//!   `agent_http::init(cx)` and `agent_http::setup_workspace_observer(cx)`
 //!   inside the existing agent-panel init path.
 
 mod broker;
+mod commands;
 #[cfg(feature = "workspace_discovery")]
 mod discovery;
 mod server;
@@ -22,7 +25,7 @@ mod subscriptions;
 
 #[cfg(feature = "workspace_discovery")]
 pub use discovery::setup_workspace_observer;
-pub use state::{AppState, AppStateHandle, SnapshotEvent, ThreadSummary};
+pub use state::{AppState, AppStateHandle, Command, SnapshotEvent, ThreadSummary};
 pub use subscriptions::observe_thread;
 
 use std::thread;
@@ -35,8 +38,9 @@ pub fn init(cx: &mut App) {
     if cx.try_global::<AppStateHandle>().is_some() {
         return;
     }
-    let state = AppState::new();
+    let (state, command_rx) = AppState::new();
     cx.set_global(AppStateHandle::new(state.clone()));
+    commands::spawn_worker(cx, command_rx);
 
     thread::Builder::new()
         .name("agent-http".into())

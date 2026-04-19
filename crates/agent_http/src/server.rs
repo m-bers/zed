@@ -4,14 +4,16 @@ use std::convert::Infallible;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use axum::Router;
-use axum::extract::State;
+use axum::extract::{Path, State};
+use axum::http::StatusCode;
 use axum::response::sse::{Event, KeepAlive, Sse};
-use axum::response::{Html, Json};
-use axum::routing::get;
+use axum::response::{Html, IntoResponse, Json};
+use axum::routing::{get, post};
 use futures::stream::{Stream, StreamExt};
+use serde::Deserialize;
 use tokio_stream::wrappers::BroadcastStream;
 
-use crate::state::{AppState, ThreadSummary};
+use crate::state::{AppState, Command, ThreadSummary};
 
 const DEFAULT_PORT: u16 = 9292;
 const INDEX_HTML: &str = include_str!("assets/index.html");
@@ -23,6 +25,7 @@ pub async fn run(state: AppState) {
     let app = Router::new()
         .route("/", get(index))
         .route("/api/sessions", get(list_sessions))
+        .route("/api/sessions/:session_id/prompt", post(send_prompt))
         .route("/api/events", get(events))
         .with_state(state);
 
@@ -45,6 +48,29 @@ async fn index() -> Html<&'static str> {
 
 async fn list_sessions(State(state): State<AppState>) -> Json<Vec<ThreadSummary>> {
     Json(state.list_threads())
+}
+
+#[derive(Deserialize)]
+struct PromptBody {
+    content: String,
+}
+
+async fn send_prompt(
+    State(state): State<AppState>,
+    Path(session_id): Path<String>,
+    Json(body): Json<PromptBody>,
+) -> impl IntoResponse {
+    match state.dispatch(Command::SendPrompt {
+        session_id,
+        content: body.content,
+    }) {
+        Ok(()) => (StatusCode::ACCEPTED, "accepted").into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("dispatch failed: {error}"),
+        )
+            .into_response(),
+    }
 }
 
 async fn events(

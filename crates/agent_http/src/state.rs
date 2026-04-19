@@ -2,11 +2,13 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use acp_thread::AcpThread;
 use agent_client_protocol as acp;
 use collections::HashMap;
-use gpui::{Global, Subscription};
+use gpui::{Global, Subscription, WeakEntity};
 use parking_lot::RwLock;
 use serde::Serialize;
+use tokio::sync::mpsc;
 
 use crate::broker::Broker;
 
@@ -55,10 +57,28 @@ pub struct ThreadSummary {
     pub title: Option<String>,
 }
 
-#[derive(Clone, Default)]
+/// Commands posted from the tokio-side HTTP handlers back to the gpui main
+/// thread. A dedicated worker task in agent_http::init drains the receiver and
+/// dispatches each command against the `ThreadRegistry` held by
+/// `AppStateHandle`.
+#[derive(Debug)]
+pub enum Command {
+    SendPrompt {
+        session_id: String,
+        content: String,
+    },
+}
+
+/// Shared state safe to hand to the tokio runtime hosting the HTTP server.
+///
+/// Holds only `Send + Sync` data. Per-thread gpui handles (the entity registry
+/// and the subscription reservoir) live in `AppStateHandle`, which is
+/// gpui-main-thread only.
+#[derive(Clone)]
 pub struct AppState {
     inner: Arc<RwLock<Inner>>,
     broker: Broker,
+    command_tx: mpsc::UnboundedSender<Command>,
 }
 
 #[derive(Default)]
@@ -67,11 +87,16 @@ struct Inner {
 }
 
 impl AppState {
-    pub fn new() -> Self {
-        Self {
-            inner: Arc::new(RwLock::new(Inner::default())),
-            broker: Broker::default(),
-        }
+    pub fn new() -> (Self, mpsc::UnboundedReceiver<Command>) {
+        let (command_tx, command_rx) = mpsc::unbounded_channel();
+        (
+            Self {
+                inner: Arc::new(RwLock::new(Inner::default())),
+                broker: Broker::default(),
+                command_tx,
+            },
+            command_rx,
+        )
     }
 
     pub fn broker(&self) -> &Broker {
@@ -110,18 +135,38 @@ impl AppState {
     pub fn publish(&self, event: SnapshotEvent) {
         self.broker.publish(event);
     }
+
+    pub fn dispatch(&self, command: Command) -> Result<(), mpsc::error::SendError<Command>> {
+        self.command_tx.send(command)
+    }
+}
+
+/// Main-thread-only registry mapping session IDs to weak `AcpThread` handles.
+#[derive(Default)]
+pub struct ThreadRegistry {
+    by_session: HashMap<acp::SessionId, WeakEntity<AcpThread>>,
+}
+
+impl ThreadRegistry {
+    pub fn register(&mut self, session_id: acp::SessionId, handle: WeakEntity<AcpThread>) {
+        self.by_session.insert(session_id, handle);
+    }
+
+    pub fn lookup_by_string(&self, session_id_str: &str) -> Option<WeakEntity<AcpThread>> {
+        self.by_session
+            .iter()
+            .find(|(id, _)| id.to_string() == session_id_str)
+            .map(|(_, h)| h.clone())
+    }
 }
 
 /// Global handle so any `App` can reach the shared state without each window
-/// re-initialising. Owns the cross-thread `AppState` plus the subscription
-/// reservoir (subscriptions live as long as this handle does).
-///
-/// Uses `Rc<RefCell<_>>` for the subscription vector because gpui's
-/// `Subscription` is not `Send`, and anything touching the subscription list
-/// stays on the gpui main thread anyway.
+/// re-initialising. Owns the cross-thread `AppState`, the thread-entity
+/// registry, and the gpui subscription reservoir.
 #[derive(Clone)]
 pub struct AppStateHandle {
     state: AppState,
+    registry: Rc<RefCell<ThreadRegistry>>,
     subscriptions: Rc<RefCell<Vec<Subscription>>>,
 }
 
@@ -129,12 +174,17 @@ impl AppStateHandle {
     pub fn new(state: AppState) -> Self {
         Self {
             state,
+            registry: Rc::new(RefCell::new(ThreadRegistry::default())),
             subscriptions: Rc::new(RefCell::new(Vec::new())),
         }
     }
 
     pub fn state(&self) -> &AppState {
         &self.state
+    }
+
+    pub fn registry(&self) -> Rc<RefCell<ThreadRegistry>> {
+        self.registry.clone()
     }
 
     pub fn subscriptions(&self) -> Rc<RefCell<Vec<Subscription>>> {
