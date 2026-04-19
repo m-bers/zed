@@ -36,6 +36,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential \
+            lld \
             pkg-config \
             libssl-dev \
             libxkbcommon-dev \
