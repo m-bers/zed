@@ -29,6 +29,7 @@ mod tests;
 
 #[cfg(feature = "workspace_discovery")]
 pub use discovery::setup_workspace_observer;
+pub use server::run as run_server;
 pub use state::{AppState, AppStateHandle, Command, SnapshotEvent, ThreadSummary};
 pub use subscriptions::observe_thread;
 

@@ -12,12 +12,20 @@ workspace = true
 path = "src/agent_http.rs"
 doctest = false
 
+[[bin]]
+name = "agent_http_demo"
+path = "src/bin/agent_http_demo.rs"
+required-features = ["demo"]
+
 [features]
 default = []
 # Pulls in agent_ui + workspace so the crate can observe Workspace entities and
 # walk their AgentPanel for newly-created AcpThreads. Enabled by the Zed
 # binary when the `agent_http` feature there is active.
 workspace_discovery = ["dep:agent_ui", "dep:workspace"]
+# Builds the standalone `agent_http_demo` binary — useful for smoke-testing
+# the HTTP + SSE layer without a full Zed/gpui context.
+demo = ["dep:env_logger"]
 
 [dependencies]
 acp_thread.workspace = true
@@ -34,6 +42,7 @@ serde_json.workspace = true
 workspace = { workspace = true, optional = true }
 
 axum = "0.7"
+env_logger = { version = "0.11", optional = true }
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "net", "io-util", "macros", "signal"] }
 tower-http = { version = "0.5", features = ["cors", "trace"] }
 tokio-stream = { version = "0.1", features = ["sync"] }

@@ -1,0 +1,68 @@
+name: agent-http-demo-build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [agent-http]
+    paths:
+      - 'crates/agent_http/**'
+      - '.github/workflows/agent-http-demo-build.yml'
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: '0'
+  RUST_BACKTRACE: '1'
+
+jobs:
+  build-aarch64-linux:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustc --version
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: agent-http-demo-aarch64
+          cache-on-failure: true
+
+      - name: Install Linux build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config \
+            libssl-dev \
+            libxkbcommon-dev \
+            libxkbcommon-x11-0 \
+            libwayland-dev \
+            libxcb1-dev \
+            libx11-dev \
+            libxi-dev \
+            libgl1-mesa-dev \
+            libasound2-dev \
+            libfontconfig1-dev \
+            libglib2.0-dev \
+            protobuf-compiler \
+            cmake
+
+      - name: Build agent_http_demo (release, aarch64-linux)
+        run: cargo build --release -p agent_http --features demo --bin agent_http_demo
+
+      - name: Strip binary
+        run: |
+          ls -la target/release/agent_http_demo
+          strip target/release/agent_http_demo
+          ls -la target/release/agent_http_demo
+          file target/release/agent_http_demo
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agent_http_demo-aarch64-linux
+          path: target/release/agent_http_demo
+          if-no-files-found: error
+          retention-days: 14
