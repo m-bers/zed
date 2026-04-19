@@ -5346,6 +5346,9 @@ mod tests {
                 cx,
             );
 
+            #[cfg(feature = "agent_http")]
+            agent_http::init(cx);
+
             repl::init(app_state.fs.clone(), cx);
             repl::notebook::init(cx);
             tasks_ui::init(cx);

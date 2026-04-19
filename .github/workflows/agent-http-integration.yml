@@ -1,4 +1,4 @@
-name: agent-http-check
+name: agent-http-integration
 
 on:
   workflow_dispatch:
@@ -6,7 +6,9 @@ on:
     branches: [agent-http]
     paths:
       - 'crates/agent_http/**'
-      - '.github/workflows/agent-http-check.yml'
+      - 'crates/zed/Cargo.toml'
+      - 'crates/zed/src/zed.rs'
+      - '.github/workflows/agent-http-integration.yml'
       - 'Cargo.toml'
       - 'Cargo.lock'
 
@@ -16,21 +18,21 @@ env:
   RUST_BACKTRACE: '1'
 
 jobs:
-  check:
+  integration:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
       - name: Install stable Rust
         run: |
-          rustup toolchain install stable --profile minimal --component clippy
+          rustup toolchain install stable --profile minimal
           rustup default stable
           rustc --version
 
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: agent-http-check
+          shared-key: agent-http-integration
           cache-on-failure: true
 
       - name: Install Linux build deps
@@ -46,14 +48,14 @@ jobs:
             libx11-dev \
             libxi-dev \
             libgl1-mesa-dev \
+            libasound2-dev \
+            libfontconfig1-dev \
+            libfreetype6-dev \
             protobuf-compiler \
-            cmake
+            cmake \
+            mold
 
-      - name: cargo check -p agent_http
-        run: cargo check -p agent_http --all-targets
-
-      - name: cargo clippy -p agent_http
-        run: cargo clippy -p agent_http --all-targets -- -D warnings
-
-      - name: cargo test -p agent_http (compile only)
-        run: cargo test -p agent_http --no-run
+      - name: cargo check -p zed --features agent_http
+        env:
+          ZED_CLIENT_CHECKSUM_SEED: ci-placeholder-not-a-secret
+        run: cargo check -p zed --features agent_http

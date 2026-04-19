@@ -12,6 +12,7 @@ default-run = "zed"
 workspace = true
 
 [features]
+agent_http = ["dep:agent_http"]
 tracy = ["ztracing/tracy"]
 # LEAK_BACKTRACE=1 cargo run --features zed/track-project-leak --profile release-fast
 track-project-leak = ["gpui/leak-detection"]
@@ -68,6 +69,7 @@ activity_indicator.workspace = true
 agent.workspace = true
 agent-client-protocol.workspace = true
 agent_settings.workspace = true
+agent_http = { workspace = true, optional = true }
 agent_ui = { workspace = true, features = ["audio"] }
 anyhow.workspace = true
 askpass.workspace = true
