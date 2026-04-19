@@ -8,6 +8,7 @@ use agent_ui::{AgentPanel, AgentPanelEvent, ConversationView};
 use gpui::{App, Context, Entity};
 use workspace::Workspace;
 
+use crate::state::AppStateHandle;
 use crate::subscriptions::observe_thread;
 
 /// Register a global workspace observer that walks each workspace's
@@ -30,16 +31,36 @@ pub fn setup_workspace_observer(cx: &mut App) {
 }
 
 fn walk_retained_threads(panel: &Entity<AgentPanel>, cx: &mut App) {
-    let threads: Vec<Entity<AcpThread>> = panel
+    // Collect `(thread, conversation_view)` pairs before touching the registries
+    // so the `panel.read(cx)` borrow is released before each `observe_thread` call
+    // (which needs `&mut App`).
+    let pairs: Vec<(Entity<AcpThread>, Entity<ConversationView>)> = panel
         .read(cx)
         .retained_threads()
         .values()
         .filter_map(|cv: &Entity<ConversationView>| {
             let tv = cv.read(cx).root_thread_view()?;
-            Some(tv.read(cx).thread.clone())
+            Some((tv.read(cx).thread.clone(), cv.clone()))
         })
         .collect();
-    for thread in threads {
+
+    for (thread, cv) in pairs {
+        register_conversation_view(&thread, &cv, cx);
         observe_thread(thread, cx);
     }
+}
+
+fn register_conversation_view(
+    thread: &Entity<AcpThread>,
+    conversation_view: &Entity<ConversationView>,
+    cx: &mut App,
+) {
+    let Some(handle) = cx.try_global::<AppStateHandle>().cloned() else {
+        return;
+    };
+    let session_id = thread.read(cx).session_id().clone();
+    handle
+        .conversation_registry()
+        .borrow_mut()
+        .register(session_id, conversation_view.downgrade());
 }

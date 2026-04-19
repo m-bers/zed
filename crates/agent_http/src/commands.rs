@@ -9,6 +9,8 @@ use anyhow::Result;
 use gpui::App;
 use tokio::sync::mpsc;
 
+#[cfg(feature = "workspace_discovery")]
+use crate::state::PermissionDecision;
 use crate::state::{AppStateHandle, Command};
 
 pub fn spawn_worker(cx: &mut App, mut command_rx: mpsc::UnboundedReceiver<Command>) {
@@ -33,6 +35,21 @@ fn dispatch(command: Command, cx: &mut App) -> Result<()> {
             session_id,
             content,
         } => send_prompt(&handle, &session_id, content, cx),
+        Command::CancelSession { session_id } => cancel_session(&handle, &session_id, cx),
+        Command::AuthorizePendingTool {
+            session_id,
+            decision,
+        } => {
+            #[cfg(feature = "workspace_discovery")]
+            {
+                authorize_pending_tool(&handle, &session_id, decision, cx)
+            }
+            #[cfg(not(feature = "workspace_discovery"))]
+            {
+                let _ = (session_id, decision);
+                anyhow::bail!("authorize_pending_tool requires workspace_discovery feature")
+            }
+        }
     }
 }
 
@@ -57,6 +74,46 @@ fn send_prompt(
             }
         })
         .detach();
+    });
+    Ok(())
+}
+
+fn cancel_session(handle: &AppStateHandle, session_id: &str, cx: &mut App) -> Result<()> {
+    let Some(weak) = handle.registry().borrow().lookup_by_string(session_id) else {
+        anyhow::bail!("unknown session_id {session_id}");
+    };
+    let thread = weak
+        .upgrade()
+        .ok_or_else(|| anyhow::anyhow!("session {session_id} no longer exists"))?;
+
+    thread.update(cx, |thread, cx| {
+        thread.cancel(cx).detach();
+    });
+    Ok(())
+}
+
+#[cfg(feature = "workspace_discovery")]
+fn authorize_pending_tool(
+    handle: &AppStateHandle,
+    session_id: &str,
+    decision: PermissionDecision,
+    cx: &mut App,
+) -> Result<()> {
+    let Some(weak) = handle
+        .conversation_registry()
+        .borrow()
+        .lookup_by_string(session_id)
+    else {
+        anyhow::bail!("no ConversationView for session {session_id}");
+    };
+    let conversation = weak
+        .upgrade()
+        .ok_or_else(|| anyhow::anyhow!("ConversationView for {session_id} no longer exists"))?;
+
+    let session_id_parsed = agent_client_protocol::SessionId(session_id.to_string().into());
+    let kind = decision.as_kind();
+    conversation.update(cx, |view, cx| {
+        view.authorize_pending_tool_call(&session_id_parsed, kind, cx);
     });
     Ok(())
 }

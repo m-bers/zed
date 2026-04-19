@@ -7,7 +7,7 @@ use agent_client_protocol as acp;
 use collections::HashMap;
 use gpui::{Global, Subscription, WeakEntity};
 use parking_lot::RwLock;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 use crate::broker::Broker;
@@ -57,6 +57,26 @@ pub struct ThreadSummary {
     pub title: Option<String>,
 }
 
+#[derive(Copy, Clone, Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PermissionDecision {
+    AllowOnce,
+    AllowAlways,
+    RejectOnce,
+    RejectAlways,
+}
+
+impl PermissionDecision {
+    pub fn as_kind(self) -> acp::PermissionOptionKind {
+        match self {
+            Self::AllowOnce => acp::PermissionOptionKind::AllowOnce,
+            Self::AllowAlways => acp::PermissionOptionKind::AllowAlways,
+            Self::RejectOnce => acp::PermissionOptionKind::RejectOnce,
+            Self::RejectAlways => acp::PermissionOptionKind::RejectAlways,
+        }
+    }
+}
+
 /// Commands posted from the tokio-side HTTP handlers back to the gpui main
 /// thread. A dedicated worker task in agent_http::init drains the receiver and
 /// dispatches each command against the `ThreadRegistry` held by
@@ -66,6 +86,13 @@ pub enum Command {
     SendPrompt {
         session_id: String,
         content: String,
+    },
+    CancelSession {
+        session_id: String,
+    },
+    AuthorizePendingTool {
+        session_id: String,
+        decision: PermissionDecision,
     },
 }
 
@@ -160,6 +187,35 @@ impl ThreadRegistry {
     }
 }
 
+/// Main-thread-only registry mapping session IDs to weak `ConversationView`
+/// handles. Only populated when the `workspace_discovery` feature is active.
+#[cfg(feature = "workspace_discovery")]
+#[derive(Default)]
+pub struct ConversationViewRegistry {
+    by_session: HashMap<acp::SessionId, WeakEntity<agent_ui::ConversationView>>,
+}
+
+#[cfg(feature = "workspace_discovery")]
+impl ConversationViewRegistry {
+    pub fn register(
+        &mut self,
+        session_id: acp::SessionId,
+        handle: WeakEntity<agent_ui::ConversationView>,
+    ) {
+        self.by_session.insert(session_id, handle);
+    }
+
+    pub fn lookup_by_string(
+        &self,
+        session_id_str: &str,
+    ) -> Option<WeakEntity<agent_ui::ConversationView>> {
+        self.by_session
+            .iter()
+            .find(|(id, _)| id.to_string() == session_id_str)
+            .map(|(_, h)| h.clone())
+    }
+}
+
 /// Global handle so any `App` can reach the shared state without each window
 /// re-initialising. Owns the cross-thread `AppState`, the thread-entity
 /// registry, and the gpui subscription reservoir.
@@ -167,6 +223,8 @@ impl ThreadRegistry {
 pub struct AppStateHandle {
     state: AppState,
     registry: Rc<RefCell<ThreadRegistry>>,
+    #[cfg(feature = "workspace_discovery")]
+    conversation_registry: Rc<RefCell<ConversationViewRegistry>>,
     subscriptions: Rc<RefCell<Vec<Subscription>>>,
 }
 
@@ -175,6 +233,8 @@ impl AppStateHandle {
         Self {
             state,
             registry: Rc::new(RefCell::new(ThreadRegistry::default())),
+            #[cfg(feature = "workspace_discovery")]
+            conversation_registry: Rc::new(RefCell::new(ConversationViewRegistry::default())),
             subscriptions: Rc::new(RefCell::new(Vec::new())),
         }
     }
@@ -185,6 +245,11 @@ impl AppStateHandle {
 
     pub fn registry(&self) -> Rc<RefCell<ThreadRegistry>> {
         self.registry.clone()
+    }
+
+    #[cfg(feature = "workspace_discovery")]
+    pub fn conversation_registry(&self) -> Rc<RefCell<ConversationViewRegistry>> {
+        self.conversation_registry.clone()
     }
 
     pub fn subscriptions(&self) -> Rc<RefCell<Vec<Subscription>>> {

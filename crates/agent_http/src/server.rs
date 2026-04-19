@@ -14,7 +14,7 @@ use serde::Deserialize;
 use tokio_stream::wrappers::BroadcastStream;
 
 use crate::settings::RuntimeSettings;
-use crate::state::{AppState, Command, ThreadSummary};
+use crate::state::{AppState, Command, PermissionDecision, ThreadSummary};
 
 const INDEX_HTML: &str = include_str!("assets/index.html");
 
@@ -26,6 +26,8 @@ pub async fn run(state: AppState) {
         .route("/", get(index))
         .route("/api/sessions", get(list_sessions))
         .route("/api/sessions/:session_id/prompt", post(send_prompt))
+        .route("/api/sessions/:session_id/cancel", post(cancel_session))
+        .route("/api/sessions/:session_id/approve", post(approve_pending))
         .route("/api/events", get(events))
         .with_state(state);
 
@@ -71,15 +73,42 @@ struct PromptBody {
     content: String,
 }
 
+#[derive(Deserialize)]
+struct ApproveBody {
+    decision: PermissionDecision,
+}
+
 async fn send_prompt(
     State(state): State<AppState>,
     Path(session_id): Path<String>,
     Json(body): Json<PromptBody>,
 ) -> impl IntoResponse {
-    match state.dispatch(Command::SendPrompt {
+    accept_or_error(state.dispatch(Command::SendPrompt {
         session_id,
         content: body.content,
-    }) {
+    }))
+}
+
+async fn cancel_session(
+    State(state): State<AppState>,
+    Path(session_id): Path<String>,
+) -> impl IntoResponse {
+    accept_or_error(state.dispatch(Command::CancelSession { session_id }))
+}
+
+async fn approve_pending(
+    State(state): State<AppState>,
+    Path(session_id): Path<String>,
+    Json(body): Json<ApproveBody>,
+) -> impl IntoResponse {
+    accept_or_error(state.dispatch(Command::AuthorizePendingTool {
+        session_id,
+        decision: body.decision,
+    }))
+}
+
+fn accept_or_error<E: std::fmt::Display>(result: Result<(), E>) -> Response {
+    match result {
         Ok(()) => (StatusCode::ACCEPTED, "accepted").into_response(),
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
