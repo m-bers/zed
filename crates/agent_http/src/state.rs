@@ -1,9 +1,11 @@
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use agent_client_protocol as acp;
 use collections::HashMap;
 use gpui::{Global, Subscription};
-use parking_lot::{Mutex, RwLock};
+use parking_lot::RwLock;
 use serde::Serialize;
 
 use crate::broker::Broker;
@@ -77,14 +79,17 @@ impl AppState {
     }
 
     pub fn record_thread(&self, session_id: acp::SessionId, title: Option<String>) {
-        let summary = ThreadSummary {
-            session_id: session_id.to_string(),
-            title: title.clone(),
-        };
-        self.inner.write().threads.insert(session_id, summary.clone());
+        let session_id_str = session_id.to_string();
+        self.inner.write().threads.insert(
+            session_id,
+            ThreadSummary {
+                session_id: session_id_str.clone(),
+                title: title.clone(),
+            },
+        );
         self.broker.publish(SnapshotEvent::ThreadDiscovered {
-            session_id: summary.session_id,
-            title: summary.title,
+            session_id: session_id_str,
+            title,
         });
     }
 
@@ -110,17 +115,21 @@ impl AppState {
 /// Global handle so any `App` can reach the shared state without each window
 /// re-initialising. Owns the cross-thread `AppState` plus the subscription
 /// reservoir (subscriptions live as long as this handle does).
+///
+/// Uses `Rc<RefCell<_>>` for the subscription vector because gpui's
+/// `Subscription` is not `Send`, and anything touching the subscription list
+/// stays on the gpui main thread anyway.
 #[derive(Clone)]
 pub struct AppStateHandle {
     state: AppState,
-    subscriptions: Arc<Mutex<Vec<Subscription>>>,
+    subscriptions: Rc<RefCell<Vec<Subscription>>>,
 }
 
 impl AppStateHandle {
     pub fn new(state: AppState) -> Self {
         Self {
             state,
-            subscriptions: Arc::new(Mutex::new(Vec::new())),
+            subscriptions: Rc::new(RefCell::new(Vec::new())),
         }
     }
 
@@ -128,7 +137,7 @@ impl AppStateHandle {
         &self.state
     }
 
-    pub fn subscriptions(&self) -> Arc<Mutex<Vec<Subscription>>> {
+    pub fn subscriptions(&self) -> Rc<RefCell<Vec<Subscription>>> {
         self.subscriptions.clone()
     }
 }

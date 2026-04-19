@@ -3,11 +3,11 @@
 use std::convert::Infallible;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
+use axum::Router;
 use axum::extract::State;
 use axum::response::sse::{Event, KeepAlive, Sse};
-use axum::response::{Html, IntoResponse, Json};
+use axum::response::{Html, Json};
 use axum::routing::get;
-use axum::Router;
 use futures::stream::{Stream, StreamExt};
 use tokio_stream::wrappers::BroadcastStream;
 
