@@ -40,8 +40,8 @@ jobs:
       - name: Install build deps via script/linux
         run: ./script/linux
 
-      - name: cargo build --release -p zed --features agent_http
-        run: cargo build --release -p zed --features agent_http
+      - name: cargo build --release -p zed
+        run: cargo build --release -p zed
         timeout-minutes: 150
 
       - name: Strip binary
