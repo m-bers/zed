@@ -34,11 +34,18 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: agent-http-zed-aarch64
+          shared-key: agent-http-zed-aarch64-v2
           cache-on-failure: true
 
       - name: Install build deps via script/linux
         run: ./script/linux
+
+      - name: cargo metadata sanity check
+        run: |
+          echo '=== zed package deps ==='
+          cargo tree -p zed --edges normal --depth 1 2>&1 | head -40
+          echo '=== agent_http in tree? ==='
+          cargo tree -p zed -i agent_http 2>&1 | head -10
 
       - name: cargo build --release -p zed
         run: cargo build --release -p zed
