@@ -6,6 +6,9 @@ name: agent-http-zed-image-build
     branches: [agent-http]
     paths:
       - '.github/workflows/agent-http-zed-image-build.yml'
+      - 'crates/agent_http/**'
+      - 'crates/zed/Cargo.toml'
+      - 'crates/zed/src/zed.rs'
 
 env:
   CARGO_TERM_COLOR: always
