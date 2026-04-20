@@ -1,6 +1,6 @@
 name: agent-http-zed-image-build
 
-on:
+"on":
   workflow_dispatch:
 
 env:
