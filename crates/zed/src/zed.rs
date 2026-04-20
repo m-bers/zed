@@ -5346,9 +5346,6 @@ mod tests {
                 cx,
             );
 
-            agent_http::init(cx);
-            agent_http::setup_workspace_observer(cx);
-
             repl::init(app_state.fs.clone(), cx);
             repl::notebook::init(cx);
             tasks_ui::init(cx);

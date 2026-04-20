@@ -678,6 +678,9 @@ fn main() {
             cx,
         );
 
+        agent_http::init(cx);
+        agent_http::setup_workspace_observer(cx);
+
         repl::init(app_state.fs.clone(), cx);
         recent_projects::init(cx);
         dev_container::init(cx);
