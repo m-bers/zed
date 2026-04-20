@@ -2,6 +2,10 @@ name: agent-http-zed-image-build
 
 "on":
   workflow_dispatch:
+  push:
+    branches: [agent-http]
+    paths:
+      - '.github/workflows/agent-http-zed-image-build.yml'
 
 env:
   CARGO_TERM_COLOR: always
