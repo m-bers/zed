@@ -1,0 +1,149 @@
+name: agent-http-zed-image-build
+
+on:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: '0'
+  RUST_BACKTRACE: '1'
+  ZED_CLIENT_CHECKSUM_SEED: ci-placeholder-not-a-secret
+
+jobs:
+  build-zed-aarch64-linux:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustc --version
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: agent-http-zed-aarch64
+          cache-on-failure: true
+
+      - name: Install build deps via script/linux
+        run: ./script/linux
+
+      - name: cargo build --release -p zed --features agent_http
+        run: cargo build --release -p zed --features agent_http
+        timeout-minutes: 150
+
+      - name: Strip binary
+        run: |
+          ls -la target/release/zed
+          strip target/release/zed
+          ls -la target/release/zed
+          file target/release/zed
+
+      - name: Stage binary
+        run: |
+          mkdir -p out
+          cp target/release/zed out/zed
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zed-aarch64-linux-agent-http
+          path: out/zed
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Write Dockerfile + entrypoint
+        run: |
+          cat > Dockerfile <<'EOF'
+          FROM ubuntu:24.04
+          ENV DEBIAN_FRONTEND=noninteractive
+          RUN apt-get update && apt-get install -y --no-install-recommends \
+              ca-certificates \
+              xvfb \
+              x11vnc \
+              novnc \
+              websockify \
+              libvulkan1 \
+              libwayland-client0 \
+              libwayland-cursor0 \
+              libwayland-egl1 \
+              libxkbcommon0 \
+              libxkbcommon-x11-0 \
+              libxcb1 \
+              libxcb-xkb1 \
+              libxkbcommon-dev \
+              libfontconfig1 \
+              libfreetype6 \
+              libgl1 \
+              libegl1 \
+              libgbm1 \
+              libasound2t64 \
+              libssl3 \
+              libglib2.0-0 \
+              libgit2-1.7 \
+              libgtk-3-0 \
+              fluxbox \
+              dbus \
+              dbus-x11 \
+              curl \
+              jq \
+              bash \
+              tini \
+              && rm -rf /var/lib/apt/lists/*
+          COPY out/zed /usr/local/bin/zed
+          RUN chmod +x /usr/local/bin/zed
+          COPY entrypoint.sh /entrypoint.sh
+          RUN chmod +x /entrypoint.sh
+          EXPOSE 9292 6080
+          ENTRYPOINT ["/usr/bin/tini", "--", "/entrypoint.sh"]
+          EOF
+
+          cat > entrypoint.sh <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          export DISPLAY=:99
+          export XDG_RUNTIME_DIR=/tmp/runtime
+          mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"
+
+          # Start a virtual framebuffer.
+          Xvfb :99 -screen 0 1440x900x24 -nolisten tcp >/tmp/xvfb.log 2>&1 &
+          sleep 0.5
+
+          # Light window manager so Zed's window has decorations and focus.
+          fluxbox >/tmp/fluxbox.log 2>&1 &
+
+          # VNC server, then websockify for noVNC at /vnc.html.
+          x11vnc -display :99 -nopw -shared -forever -rfbport 5900 >/tmp/x11vnc.log 2>&1 &
+          websockify --web=/usr/share/novnc 6080 localhost:5900 >/tmp/websockify.log 2>&1 &
+
+          # Hand off to Zed. agent_http reads its own env vars (AGENT_HTTP_*).
+          export AGENT_HTTP_BIND="${AGENT_HTTP_BIND:-0.0.0.0}"
+          export AGENT_HTTP_PORT="${AGENT_HTTP_PORT:-9292}"
+          export RUST_LOG="${RUST_LOG:-info}"
+          mkdir -p /root/.config/zed
+          exec /usr/local/bin/zed --foreground "$@"
+          EOF
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/arm64
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/zed-agent-http:latest
+            ghcr.io/${{ github.repository_owner }}/zed-agent-http:${{ github.sha }}
