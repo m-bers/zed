@@ -4,16 +4,19 @@
 //! mobile-first SPA and a Server-Sent-Events stream of every `AcpThreadEvent`
 //! across every thread Zed knows about.
 //!
-//! Upstream Zed needs three additions to use this crate (all behind the
-//! `agent_http` feature flag):
+//! Upstream Zed needs three additions to use this crate:
 //!
 //! * `Cargo.toml` (workspace) — add `agent_http = { path = "crates/agent_http" }`.
-//! * `crates/zed/Cargo.toml` — `agent_http = { workspace = true, optional = true,
-//!   features = ["workspace_discovery"] }` plus `agent_http = ["dep:agent_http"]`
-//!   in `[features]`.
-//! * `crates/zed/src/zed.rs` — `#[cfg(feature = "agent_http")]` block calling
-//!   `agent_http::init(cx)` and `agent_http::setup_workspace_observer(cx)`
-//!   inside the existing agent-panel init path.
+//! * `crates/zed/Cargo.toml` —
+//!   `agent_http = { workspace = true, features = ["workspace_discovery"] }`.
+//! * `crates/zed/src/zed.rs` — `agent_http::init(cx);
+//!   agent_http::setup_workspace_observer(cx);` inside the existing agent-panel
+//!   init path.
+//!
+//! No Cargo feature flag is used — the HTTP server starts only when the
+//! `AGENT_HTTP_BIND` environment variable is set, so unconfigured Zed runs see
+//! zero overhead beyond a pair of small `cx.set_global` and `cx.observe_new`
+//! registrations.
 
 mod broker;
 mod commands;
@@ -39,6 +42,11 @@ use gpui::App;
 use tokio::runtime::Builder;
 
 /// Initialise the agent_http subsystem. Idempotent across multiple windows.
+///
+/// The HTTP server only starts if the `AGENT_HTTP_BIND` environment variable is
+/// set. Without it, this function still installs the global `AppStateHandle`
+/// (so `observe_thread` and `setup_workspace_observer` can be called safely),
+/// but no port is bound and no tokio runtime is spawned.
 pub fn init(cx: &mut App) {
     if cx.try_global::<AppStateHandle>().is_some() {
         return;
@@ -46,6 +54,16 @@ pub fn init(cx: &mut App) {
     let (state, command_rx) = AppState::new();
     cx.set_global(AppStateHandle::new(state.clone()));
     commands::spawn_worker(cx, command_rx);
+
+    if std::env::var_os("AGENT_HTTP_BIND").is_none() {
+        log::info!(
+            "agent_http: AGENT_HTTP_BIND unset, HTTP server not starting (set AGENT_HTTP_BIND=0.0.0.0 or 127.0.0.1 to enable)"
+        );
+        return;
+    }
+
+    log::info!("agent_http: AGENT_HTTP_BIND set, starting HTTP server thread");
+    eprintln!("[agent_http] starting HTTP server thread");
 
     thread::Builder::new()
         .name("agent-http".into())
@@ -58,6 +76,7 @@ pub fn init(cx: &mut App) {
                 Ok(rt) => rt,
                 Err(error) => {
                     log::error!("agent_http: failed to build tokio runtime: {error}");
+                    eprintln!("[agent_http] failed to build tokio runtime: {error}");
                     return;
                 }
             };

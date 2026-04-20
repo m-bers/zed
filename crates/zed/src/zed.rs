@@ -5346,11 +5346,8 @@ mod tests {
                 cx,
             );
 
-            #[cfg(feature = "agent_http")]
-            {
-                agent_http::init(cx);
-                agent_http::setup_workspace_observer(cx);
-            }
+            agent_http::init(cx);
+            agent_http::setup_workspace_observer(cx);
 
             repl::init(app_state.fs.clone(), cx);
             repl::notebook::init(cx);
